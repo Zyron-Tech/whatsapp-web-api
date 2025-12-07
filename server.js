@@ -129,16 +129,22 @@ function broadcastToClients(data) {
   const message = `data: ${JSON.stringify(data)}\n\n`;
   const deadClients = new Set();
   
+  console.log(`📡 Broadcasting to ${connectedClients.size} clients:`, data.type);
+  
   connectedClients.forEach(client => {
     try {
       client.write(message);
+      client.flush && client.flush(); // Ensure the message is sent immediately
     } catch (error) {
       console.error('Error broadcasting to client:', error.message);
       deadClients.add(client);
     }
   });
   
-  deadClients.forEach(client => connectedClients.delete(client));
+  deadClients.forEach(client => {
+    connectedClients.delete(client);
+    console.log(`🗑️ Removed dead client. Active clients: ${connectedClients.size}`);
+  });
 }
 
 // ==================== WHATSAPP CLIENT INITIALIZATION ====================
@@ -174,6 +180,7 @@ function initializeClient() {
     console.log('📱 QR Code received - scan with your phone');
     try {
       qrCodeData = await qrcode.toDataURL(qr);
+      isInitializing = false;
       isReady = false;
       broadcastToClients({ type: 'qr', data: qrCodeData });
     } catch (error) {
@@ -362,23 +369,53 @@ app.get('/health', (req, res) => {
 
 // Server-Sent Events
 app.get('/api/events', (req, res) => {
+  // Set proper SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   
-  connectedClients.add(res);
+  // Disable compression for SSE
+  res.setHeader('Content-Encoding', 'none');
   
-  // Send initial state
-  if (qrCodeData) {
-    res.write(`data: ${JSON.stringify({ type: 'qr', data: qrCodeData })}\n\n`);
-  } else if (isReady) {
-    res.write(`data: ${JSON.stringify({ type: 'ready', data: clientInfo })}\n\n`);
-  } else if (isInitializing) {
-    res.write(`data: ${JSON.stringify({ type: 'initializing' })}\n\n`);
+  // Write initial comment to establish connection
+  res.write(': connected\n\n');
+  
+  // Add to connected clients
+  connectedClients.add(res);
+  console.log(`✅ New SSE client connected. Total clients: ${connectedClients.size}`);
+  
+  // Send initial state immediately
+  try {
+    if (qrCodeData) {
+      const msg = `data: ${JSON.stringify({ type: 'qr', data: qrCodeData })}\n\n`;
+      res.write(msg);
+      console.log('📱 Sent QR code to new client');
+    } else if (isReady && clientInfo) {
+      const msg = `data: ${JSON.stringify({ type: 'ready', data: clientInfo })}\n\n`;
+      res.write(msg);
+      console.log('✅ Sent ready state to new client');
+    } else if (isInitializing) {
+      const msg = `data: ${JSON.stringify({ type: 'initializing' })}\n\n`;
+      res.write(msg);
+      console.log('⏳ Sent initializing state to new client');
+    } else {
+      const msg = `data: ${JSON.stringify({ type: 'disconnected', data: {} })}\n\n`;
+      res.write(msg);
+      console.log('❌ Sent disconnected state to new client');
+    }
+  } catch (error) {
+    console.error('Error sending initial state:', error);
   }
   
+  // Handle client disconnect
   req.on('close', () => {
+    connectedClients.delete(res);
+    console.log(`❌ SSE client disconnected. Total clients: ${connectedClients.size}`);
+  });
+  
+  req.on('error', (error) => {
+    console.error('SSE request error:', error);
     connectedClients.delete(res);
   });
 });

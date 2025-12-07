@@ -146,8 +146,8 @@
         } else if (data.isInitializing) {
           showInitializing();
         } else if (data.hasQR) {
-          // Will be handled by SSE
-          showLoading();
+          // Fetch the actual QR code
+          fetchQRCode();
         } else {
           showDisconnected();
         }
@@ -157,34 +157,69 @@
       }
     }
 
+    // Fetch QR Code
+    async function fetchQRCode() {
+      try {
+        const res = await fetch('/api/qr');
+        const data = await res.json();
+        
+        if (data.qr) {
+          showQRCode(data.qr);
+        } else if (data.status === 'authenticated') {
+          showAuthenticated(data.clientInfo);
+        } else if (data.status === 'initializing') {
+          showInitializing();
+        } else {
+          showLoading();
+        }
+      } catch (error) {
+        console.error('QR fetch failed:', error);
+        showLoading();
+      }
+    }
+
     // Setup Server-Sent Events
     function setupSSE() {
       if (eventSource) {
         eventSource.close();
       }
 
+      console.log('🔌 Connecting to SSE...');
       eventSource = new EventSource('/api/events');
       
       eventSource.onmessage = function(event) {
+        console.log('📨 SSE message received:', event.data);
+        
         try {
           const data = JSON.parse(event.data);
+          console.log('📦 Parsed SSE data:', data);
           
           switch(data.type) {
             case 'qr':
+              console.log('📱 Showing QR code');
               showQRCode(data.data);
               break;
             case 'ready':
+              console.log('✅ Client ready');
               showAuthenticated(data.data);
               break;
             case 'initializing':
+              console.log('⏳ Client initializing');
               showInitializing();
               break;
             case 'disconnected':
+              console.log('❌ Client disconnected');
               showDisconnected();
               break;
             case 'auth_failure':
+              console.log('🚫 Auth failure');
               showError('Authentication failed. Please try again.');
               break;
+            case 'new_message':
+              console.log('💬 New message received:', data.data);
+              break;
+            default:
+              console.log('❓ Unknown event type:', data.type);
           }
           
           reconnectAttempts = 0;
@@ -194,24 +229,28 @@
       };
 
       eventSource.onerror = function(error) {
-        console.error('SSE error:', error);
+        console.error('❌ SSE error:', error);
+        console.log('EventSource readyState:', eventSource.readyState);
         eventSource.close();
         
         if (reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
           
+          console.log(`🔄 Reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${maxReconnectAttempts})`);
           showStatus('warning', 'Connection lost. Reconnecting...');
           
           setTimeout(() => {
             setupSSE();
           }, delay);
         } else {
+          console.error('❌ Max reconnection attempts reached');
           showError('Connection failed. Please refresh the page.');
         }
       };
 
       eventSource.onopen = function() {
+        console.log('✅ SSE connection established');
         reconnectAttempts = 0;
       };
     }
